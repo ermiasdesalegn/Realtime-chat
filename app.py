@@ -580,6 +580,9 @@ class RealtimeDialogueSystem:
         self.input_active = False
         self.conversation_history = []  # For text-based conversations
         
+        # Mode switching: voice vs text
+        self.text_mode_active = False  # When True, disable voice interaction
+        
         # UI setup
         try:
             pygame.font.init()
@@ -921,6 +924,11 @@ class RealtimeDialogueSystem:
         debug_print("👂 Starting continuous voice activity monitoring (auto-interruption disabled)...", "VAD")
         while self.active and self.continuous_recording:
             try:
+                # Skip voice monitoring if in text mode
+                if self.text_mode_active:
+                    await asyncio.sleep(0.2)  # Sleep longer when in text mode
+                    continue
+                    
                 await asyncio.sleep(0.05)  # REDUCED from 0.1 to 0.05 for more responsive voice monitoring
             except Exception as e:
                 debug_print(f"❌ Error in voice monitoring: {e}", "VAD_ERROR")
@@ -955,6 +963,11 @@ class RealtimeDialogueSystem:
         
         while self.is_listening and self.audio_handler.is_recording and self.active:
             try:
+                # Skip voice processing if in text mode
+                if self.text_mode_active:
+                    time.sleep(0.1)  # Sleep longer when in text mode to save CPU
+                    continue
+                    
                 chunk = self.audio_handler.record_chunk()
                 if chunk and self.loop:
                     # Perform voice activity detection for interruption and UI feedback
@@ -1298,6 +1311,8 @@ class RealtimeDialogueSystem:
                 self.is_user_speaking = False
                 self.silence_duration = 0
                 self.last_audio_level = 0.0
+                # Reset mode to voice mode for next conversation
+                self.text_mode_active = False
                 # CRITICAL: Force garbage collection to prevent memory leaks
                 import gc
                 gc.collect()
@@ -1508,25 +1523,42 @@ class RealtimeDialogueSystem:
             else:
                 npc_name = "Sarah (HR)" if self.current_npc == "HR" else "Michael (CEO)"
             
-            # Show real-time voice activity status with robust detection info
-            if self.interrupting:
-                instruction_text = f"⏳ INTERRUPTING AI... Please wait."
-            elif self.is_user_speaking:
-                instruction_text = f"🗣️ YOU ARE SPEAKING to {npc_name} | Seamless Voice Mode | Type to interrupt | Shift+Q: exit"
-            elif self.is_speaking:
-                voice_indicator = "👩‍💼" if self.current_npc == "HR" else "👨‍💼" 
-                protection_status = "🔒 PROTECTED" if self.ai_speaking_pause else "🔓 INTERRUPTIBLE"
-                instruction_text = f"{voice_indicator} {npc_name} is speaking {protection_status} | Speak CLEARLY to interrupt | Shift+Q: exit"
-            else:
-                # Show current audio level for feedback with threshold info
-                audio_level_bar = "▓" * int(self.last_audio_level * 20) + "░" * (20 - int(self.last_audio_level * 20))
-                threshold_met = "✅" if self.last_audio_level > self.voice_activity_threshold else "❌"
-                instruction_text = f"🎙️ Listening to {npc_name} | Speak CLEARLY | Audio: [{audio_level_bar}] {threshold_met} | Shift+Q: exit"
+            # Show status based on current mode (voice vs text)
+            if self.text_mode_active:
+                # Text mode instructions
+                if self.interrupting:
+                    instruction_text = f"⏳ INTERRUPTING AI... Please wait."
+                elif self.is_speaking:
+                    voice_indicator = "👩‍💼" if self.current_npc == "HR" else "👨‍💼" 
+                    instruction_text = f"{voice_indicator} {npc_name} is speaking | ⌨️ TEXT MODE | TAB to switch to voice | Shift+Q: exit"
+                else:
+                    instruction_text = f"⌨️ TEXT MODE with {npc_name} | Type + ENTER to send | TAB to switch to voice | Shift+Q: exit"
                 
-                # Add detailed audio debug info
-                debug_text = f"Level: {self.last_audio_level:.3f} | Threshold: {self.voice_activity_threshold:.3f} | Press SPACE to test interrupt"
-                debug_surface = self.font.render(debug_text, True, (255, 255, 0))
-                self.ui_surface.blit(debug_surface, (40, box_y + 35))
+                # Show text mode controls
+                controls_text = f"📝 TEXT CONTROLS: Type + ENTER to send | BACKSPACE to delete | SPACE for space | TAB to switch to voice"
+                controls_surface = self.font.render(controls_text, True, (100, 255, 255))  # Cyan for text mode
+                self.ui_surface.blit(controls_surface, (40, box_y + 35))
+                
+            else:
+                # Voice mode instructions (original)
+                if self.interrupting:
+                    instruction_text = f"⏳ INTERRUPTING AI... Please wait."
+                elif self.is_user_speaking:
+                    instruction_text = f"🗣️ YOU ARE SPEAKING to {npc_name} | 🎙️ VOICE MODE | TAB to switch to text | Shift+Q: exit"
+                elif self.is_speaking:
+                    voice_indicator = "👩‍💼" if self.current_npc == "HR" else "👨‍💼" 
+                    protection_status = "🔒 PROTECTED" if self.ai_speaking_pause else "🔓 INTERRUPTIBLE"
+                    instruction_text = f"{voice_indicator} {npc_name} is speaking {protection_status} | 🎙️ Speak OR TAB to switch | Shift+Q: exit"
+                else:
+                    # Show current audio level for feedback with threshold info
+                    audio_level_bar = "▓" * int(self.last_audio_level * 20) + "░" * (20 - int(self.last_audio_level * 20))
+                    threshold_met = "✅" if self.last_audio_level > self.voice_activity_threshold else "❌"
+                    instruction_text = f"🎙️ VOICE MODE with {npc_name} | Speak OR TAB to switch | Audio: [{audio_level_bar}] {threshold_met} | Shift+Q: exit"
+                    
+                    # Add voice mode debug info
+                    debug_text = f"🎤 Voice Level: {self.last_audio_level:.3f} | Threshold: {self.voice_activity_threshold:.3f} | TAB to switch to text mode"
+                    debug_surface = self.font.render(debug_text, True, (255, 255, 100))  # Yellow for voice mode
+                    self.ui_surface.blit(debug_surface, (40, box_y + 35))
                 
             instruction_surface = self.font.render(instruction_text, True, (255, 255, 255))
             self.ui_surface.blit(instruction_surface, (40, box_y + 10))
@@ -1565,10 +1597,19 @@ class RealtimeDialogueSystem:
                     status_surface = self.font.render(status_text, True, (128, 128, 128))  # Gray status text
                     self.ui_surface.blit(status_surface, (40, box_y + 40))
 
-            # Text input field
+            # Text input field with mode indicator
             if self.input_active:
-                input_prompt = "> " + self.user_input + "_"
-                input_surface = self.font.render(input_prompt, True, (255, 255, 255))
+                # Show mode indicator in the input field
+                if self.text_mode_active:
+                    mode_indicator = "📝 TEXT MODE"
+                    input_prompt = f"{mode_indicator} > {self.user_input}_"
+                    input_color = (100, 255, 255)  # Cyan for text mode
+                else:
+                    mode_indicator = "🎙️ VOICE MODE"
+                    input_prompt = f"{mode_indicator} > {self.user_input}_"
+                    input_color = (255, 255, 100)  # Yellow for voice mode
+                
+                input_surface = self.font.render(input_prompt, True, input_color)
                 self.ui_surface.blit(input_surface, (40, box_y + box_height - 40))
 
         # Convert surface to OpenGL texture
@@ -1634,20 +1675,67 @@ class RealtimeDialogueSystem:
                 elif event.key == pygame.K_BACKSPACE:
                     self.user_input = self.user_input[:-1]
                 elif event.key == pygame.K_SPACE:
-                    # SPACE key for instant interruption (testing)
+                    # SPACE key for instant interruption or adding space in text mode
                     if self.is_speaking or self.audio_playing:
+                        # If AI is speaking, interrupt first
                         debug_print("⚡ SPACE key pressed - Instant interruption!", "KEYBOARD_INTERRUPT")
                         self.interrupt_ai()
-                    else:
+                    elif self.text_mode_active:
+                        # In text mode, SPACE adds a space character
                         self.user_input += " "
+                elif event.key == pygame.K_TAB:
+                    # TAB key toggles between voice and text modes
+                    # Toggle between voice and text modes
+                    if self.text_mode_active:
+                        # Switch to voice mode
+                        debug_print("🎙️ TAB pressed - Switching to VOICE MODE", "MODE_SWITCH")
+                        self.text_mode_active = False
+                        self.user_input = ""  # Clear text input
+                        
+                        # Restart continuous recording
+                        if not self.is_listening:
+                            self.start_continuous_recording()
+                        
+                        debug_print("✅ Voice mode activated", "MODE_SWITCH")
+                    else:
+                        # Switch to text mode
+                        debug_print("⌨️ TAB pressed - Switching to TEXT MODE", "MODE_SWITCH")
+                        self.text_mode_active = True
+                        
+                        # Stop continuous voice recording
+                        self.stop_continuous_recording()
+                        
+                        # Clear any voice activity state
+                        self.is_user_speaking = False
+                        self.last_audio_level = 0.0
+                        
+                        debug_print("✅ Text mode activated", "MODE_SWITCH")
                 elif event.unicode.isprintable() and not keys[pygame.K_LCTRL]:
-                    # ANY printable key can interrupt AI when speaking (for testing)
-                    if self.is_speaking or self.audio_playing:
-                        debug_print("⚡ Key pressed - Interrupting AI!", "KEYBOARD_INTERRUPT")
-                        self.interrupt_ai()
-                    
-                    # Add character to input (but not if Ctrl is held)
-                    self.user_input += event.unicode
+                    # Only allow text input when in text mode
+                    if self.text_mode_active:
+                        # Add character to input (but not if Ctrl is held)
+                        self.user_input += event.unicode
+                        debug_print(f"⌨️ Text input: '{self.user_input}'", "TEXT_MODE")
+                    else:
+                        # In voice mode, typing switches to text mode
+                        debug_print("⌨️ TEXT MODE ACTIVATED - Stopping voice interaction", "MODE_SWITCH")
+                        self.text_mode_active = True
+                        
+                        # Stop continuous voice recording
+                        self.stop_continuous_recording()
+                        
+                        # Interrupt any AI speech
+                        if self.is_speaking or self.audio_playing:
+                            debug_print("⚡ Interrupting AI for text mode switch!", "MODE_SWITCH")
+                            self.interrupt_ai()
+                        
+                        # Clear any voice activity state
+                        self.is_user_speaking = False
+                        self.last_audio_level = 0.0
+                        
+                        # Add the typed character
+                        self.user_input += event.unicode
+                        debug_print(f"⌨️ Text input: '{self.user_input}'", "TEXT_MODE")
 
     def render_text(self, surface, text, x, y):
         max_width = WINDOW_WIDTH - 40
